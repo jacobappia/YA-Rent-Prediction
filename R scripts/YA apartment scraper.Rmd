@@ -1,0 +1,135 @@
+---
+title: "YA apartment scraper"
+author: "Jacob Appia"
+date: "07/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Load packages
+```{r}
+## Package for web scraping
+library(rvest)
+## used to check if a web path is allowed to be scraped
+library(robotstxt)
+## 
+library(stringr)
+##
+library(tidyverse)
+## Google API
+library(ggmap)
+
+library(here)
+```
+
+## Check legality of acquiring the data on this website
+```{r}
+paths_allowed("https://www.yarealty.com/student/search")
+```
+
+## Compile list of apartments links
+```{r}
+url <- "https://www.yarealty.com/student/search"
+base_url <- "https://www.yarealty.com"
+
+links <- read_html(url) %>% 
+  html_nodes(".profile-link") %>% 
+  html_attr('href') %>% 
+  paste(base_url, ., sep = "")
+```
+
+## Save apartment pages locally
+```{r}
+## Create a directory to store the pages
+apartment_dir <- "YA_apt_pages/"
+dir.create(apartment_dir, showWarnings = F)
+
+## Create a progress bar to track the download
+## Use progress_estimated() from dplyr pkg
+prog <- progress_estimated(length(links)) 
+
+## Download each apartment page
+
+i=0
+
+for(link in links){
+  download.file(link, destfile = file.path(apartment_dir, paste(i,basename(link), sep = "-n-")), quiet = T)
+  i=i+1
+  prog$tick()$print()
+}
+
+```
+
+
+## Creating a function to obtain apartment's details from the pages and save the result as a CSV file.
+```{r}
+pages <- dir(apartment_dir, full.names = T)
+
+## Create a function to extract details of apartments
+get_apartment_info <- function(page) {
+  ## reading in the apartment page's html source code
+  html <- read_html(page)
+  
+  ## Extracting apartment's details
+  info <- html %>% 
+    ## grab all elements with that css class
+    html_nodes(".lg-only , #property-search-profile .heading-2 , .property-attributes") %>% 
+    ## extracting only the text inside the element
+    html_text() %>%  
+    ## converting extra white spaces into new line
+    str_replace_all("\\s{2,}", "\n") 
+  
+  ## excluding irrelevant information from the result
+  info = info[-c(1:218)]
+  
+  ## Building query to obtain latitude and longitude from Google API
+  map_src <- html %>% 
+    html_element("div.property-buttons-inner > a.cms-btn.cms-btn-secondary") %>% 
+    html_attr("href")
+  
+  address_query <- str_split(map_src,"=")[[1]][2]
+  
+  ## Querying google api for lat and long
+  location<-geocode(address_query)
+  
+  
+  # Compiling a list of amenities available at each apartment
+  Amenities = (info[4] %>% str_trim() %>%  str_split("\n"))
+  
+  data_tmp<- list()
+  idx = 1
+  total = length(Amenities[[1]])-1
+  
+  for( idx in 1:total){
+    data_tmp[Amenities[[1]][idx]]=Amenities[[1]][idx+1]
+  }
+ 
+  
+  ## Create a data frame to store each apartment's detail
+  data_frame(
+    Name = info[1],
+    Address = info[1] %>% str_replace_all("\n", " ") %>% str_trim(),
+    Rent = (info[2] %>% str_replace_all("\n", "") %>% str_split("-"))[[1]][1]%>% parse_number(),
+    Beds = (info[3] %>% str_trim() %>%  str_split("\n")) [[1]][1] %>% parse_number(),
+    Bath = (info[3] %>% str_trim() %>%  str_split("\n")) [[1]][2]%>% parse_number(),
+    Parking = ifelse(hasName(data_tmp,"Parking"), "Yes", "No"),
+    Utilities = ifelse(hasName(data_tmp, "Utilities"), "Yes", "No"),
+    `Type of Laundry` = ifelse(hasName(data_tmp, "Type of Laundry"),data_tmp$`Type of Laundry`, "In-Unit"),
+    Latitude = location$lat,
+    Longitude = location$lon
+    
+  ) 
+}
+
+## get apartment details and store it in a data frame
+apartments <- map_df(pages, get_apartment_info)
+
+## Save the extract data as a CSV
+write_csv(apartments, file = here("Data/YA_apartments.csv"))
+```
+
+

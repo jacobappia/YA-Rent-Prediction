@@ -1,0 +1,7 @@
+"0","## create train and test data using rsample"
+"0","set.seed(123)"
+"0","split <- initial_split(final_data, prop=.7)"
+"0","train <- training(split)"
+"0","test <- testing(split)"
+"0",""
+"0","kfolds <- vfold_cv(train)"

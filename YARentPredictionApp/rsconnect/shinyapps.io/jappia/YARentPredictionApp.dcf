@@ -1,0 +1,13 @@
+name: YARentPredictionApp
+title: YARentPredictionApp
+username:
+account: jappia
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 6044297
+bundleId: 5776620
+url: https://jappia.shinyapps.io/YARentPredictionApp/
+when: 1649385531.79989
+lastSyncTime: 1649385531.79992
+asMultiple: FALSE
+asStatic: FALSE

@@ -1,0 +1,206 @@
+---
+title: "Rent Prediction Analysis"
+author: "Jacob Appia"
+date: "07/04/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(here)
+```
+
+# Load scraped Students apartment data
+```{r}
+YA_data <- read.csv(here("Data/YA_apartments.csv"))
+
+str(YA_data)
+
+## excluding irrelevant field such as name and address from the data
+data <- YA_data[, -c(1,2)]
+
+summary(data)
+```
+The summary of the data indicates we have 3 missing values in Rent and 2 missing values in Beds and inconsistency in the Type of laundry column. 
+
+# Fixing the data (NAs and Inconsistency)
+```{r}
+## The missing values in Rent column will be dropped since there was no info on the website.
+data <- data %>% filter(!is.na(Rent))
+
+## Checking on the website, the 2 missing values in Beds column as supposed to 1 for each. 
+data$Beds <- data$Beds %>% replace_na(1)
+
+
+## Create a function to fix the inconsistency in Type of Laundry column
+fix_TypeOfLaundry_data <- function (x) {
+  
+  ifelse(x %in% c("coin","Coin","Coin (in unit W/D for remodels)"), "Coin",
+       ifelse(x %in% c("In Unit", "in unit washer / Dryer", "In-unit", "In-Unit", "In-unit W/D", "Inp-unit", "On premise", "W/D in Unit", "W/D In unit", "W/D In Unit"), "In-Unit", x))
+  
+}
+
+data <- data %>% mutate(
+  Type.of.Laundry = fix_TypeOfLaundry_data(Type.of.Laundry)
+)
+
+## converting categorical column as factors
+data$Parking <- factor(data$Parking)
+data$Utilities <- factor(data$Utilities)
+data$Type.of.Laundry <- factor(data$Type.of.Laundry)
+
+summary(data)
+```
+
+# Feature engineering
+We create a distance column to record the distance of each apartment from ISU BONE STUDENT CENTER
+```{r}
+## Latitude and longitude of ISU BONE STUDENT CENTER
+ISU_lat = 40.5154253
+ISU_long = -88.9950361
+
+## A function to compute the distance between two geo cordinates in km
+haversine <- function(longitude1, latitude1, longitude2, latitude2, decimals=3)
+{
+## convert to radians
+longitude1= longitude1 * pi / 180
+latitude1= latitude1 * pi / 180
+longitude2= longitude2 * pi / 180
+latitude2= latitude2 * pi/ 180
+
+## Earth mean radius in km
+R = 6371 
+a= sin((latitude2- latitude1)/2)^2 + cos(latitude1)*cos(latitude2)*sin((longitude2 - longitude1)/2)^2
+d= R * 2 * asin(sqrt(a))
+
+## distance in km
+return( round(d, decimals) ) 
+}
+
+## Compute distance of each apartment from Bone student center in kilometers 
+final_data <- data %>% mutate(
+  distance = haversine(ISU_long, ISU_lat, Longitude, Latitude)
+)
+
+## We exclude latitude and longitude from the final data
+final_data <- final_data %>% select(-c(Longitude,Latitude))
+final_data %>% rmarkdown::paged_table()
+```
+
+# Splitting data for model training
+```{r}
+## create train and test data using rsample
+set.seed(123)
+split <- initial_split(final_data, prop=.7)
+train <- training(split)
+test <- testing(split)
+
+kfolds <- vfold_cv(train)
+```
+
+
+```{r}
+# Recipes package
+# preprocessing
+tidy_rec <- recipe(Rent ~ ., data=train) %>% 
+  step_dummy(all_nominal()) 
+  
+```
+
+
+# Building XGBoost model
+```{r}
+# Parsnip package
+# api for creating models
+boosted_model <- boost_tree(trees = tune(),
+                                 min_n = tune(),
+                                 #tree_depth = tune(),
+                                 loss_reduction = tune(),
+                                 learn_rate = tune()) %>% 
+  set_mode("regression") %>% 
+  set_engine("xgboost", objective = "reg:squarederror")
+
+
+```
+
+# Building Random Forest model
+```{r}
+## randomForest/ranger
+rf_model <- rand_forest(mode = "regression", mtry = .preds(), trees = tune()) %>%
+  set_engine("ranger") 
+```
+
+# Tuning models
+```{r}
+# Dials create the parameter grids
+#Tune applies the parameter grid to the models
+
+# Dials package
+boosted_grid <- grid_regular(parameters(boosted_model), levels = 5)
+rf_grid <- grid_regular(parameters(rf_model), levels = 10)
+
+
+# Tune package
+boosted_tune <- tune_grid(boosted_model,
+                          tidy_rec,
+                          resamples = kfolds,
+                          grid = boosted_grid,
+                          metrics = metric_set(rmse, rsq, mae))
+
+rf_tune <- tune_grid(rf_model,
+                          tidy_rec,
+                          resamples = kfolds,
+                          grid = rf_grid,
+                          metrics = metric_set(rmse, rsq, mae))
+
+# Use Tune package to extract best parameters using rsq/rmse/mae
+boosted_param <- boosted_tune %>% select_best("rmse")
+
+rf_param <- rf_tune %>% select_best("rmse")
+#collect_metrics(boosted_tune)
+
+# Apply parameters to the models
+final_boosted_model <- finalize_model(boosted_model, boosted_param)
+final_rf_model <- finalize_model(rf_model, rf_param)
+```
+
+```{r}
+# Workflow package
+# for combining model, parameters, and preprocessing
+boosted_wf <- workflow() %>% 
+  add_model(final_boosted_model) %>% 
+  add_recipe(tidy_rec)
+
+rf_wf <- workflow() %>% 
+  add_model(final_rf_model) %>% 
+  add_recipe(tidy_rec)
+```
+
+# Comparing models metric to select the best model for the data
+```{r}
+# Yardstick package
+# for extracting metrics from the model
+
+boosted_res <- last_fit(boosted_wf, split)
+rf_res <- last_fit(rf_wf, split)
+
+bind_rows(
+  boosted_res %>% mutate(model = "xgb"),
+  rf_res %>% mutate(model = "rf")
+) %>% unnest(.metrics) %>% select(.metric, .estimator, .estimate, model)
+```
+The Random forest model had a better performance (smaller rmse and higher r square) compared to the XGBoost model.
+
+# Build final model using the Random Forest
+```{r}
+final_model <- fit(rf_wf, final_data)
+saveRDS(final_model, here("Model/ya_rent_model.rds"))
+
+```
+
+

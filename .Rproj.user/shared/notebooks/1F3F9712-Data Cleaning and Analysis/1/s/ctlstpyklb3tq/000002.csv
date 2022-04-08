@@ -1,0 +1,3 @@
+"0","## randomForest/ranger"
+"0","rf_model <- rand_forest(mode = ""regression"", mtry = .preds(), trees = tune()) %>%"
+"0","  set_engine(""ranger"") "
