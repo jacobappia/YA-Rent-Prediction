@@ -1,3 +1,0 @@
-"0","final_model <- fit(rf_wf, final_data)"
-"0","saveRDS(final_model, here(""Model/ya_rent_model.rds""))"
-"0",""

@@ -1,5 +1,0 @@
-"0","# Recipes package"
-"0","# preprocessing"
-"0","tidy_rec <- recipe(Rent ~ ., data=train) %>% "
-"0","  step_dummy(all_nominal()) "
-"0","  "
